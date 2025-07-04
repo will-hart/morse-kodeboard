@@ -29,3 +29,8 @@ firmware for a RP Pico that uses a single button and morse code and pretends to
 be a USB keyboard.
 
 I honestly don't know why I did this, I don't even know morse code.
+
+## License
+
+* Software: MIT or Apache 2.0
+* Hardware (not that there is any yet): CERN Open Hardware 2.0 - Permissive
