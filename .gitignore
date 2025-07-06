@@ -1,1 +1,16 @@
 /target
+pcb/manu_files/morse_kodeboard-B_Cu.gbr
+pcb/manu_files/morse_kodeboard-B_Mask.gbr
+pcb/ProjectLibrary.bak
+pcb/manu_files/morse_kodeboard-B_Paste.gbr
+pcb/manu_files/morse_kodeboard-B_Silkscreen.gbr
+pcb/manu_files/morse_kodeboard-Edge_Cuts.gbr
+pcb/manu_files/morse_kodeboard-F_Cu.gbr
+pcb/manu_files/morse_kodeboard-F_Mask.gbr
+pcb/manu_files/morse_kodeboard-F_Paste.gbr
+pcb/manu_files/morse_kodeboard-F_Silkscreen.gbr
+pcb/manu_files/morse_kodeboard-NPTH.drl
+pcb/manu_files/morse_kodeboard-PTH.drl
+pcb/manu_files/morse_kodeboard-job.gbrjob
+pcb/morse_kodeboard-backups
+pcb/sym-lib-table
