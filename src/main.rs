@@ -128,6 +128,8 @@ async fn usb_hid_loop(
     mut writer: HidWriter<'static, Driver<'static, USB>, 8>,
 ) {
     info!("Starting event loop");
+    // throttle the loop a little bit
+    let mut ticker = Ticker::every(Duration::from_millis(20));
     loop {
         match event_receiver.try_receive() {
             Ok(char) => {
@@ -166,6 +168,8 @@ async fn usb_hid_loop(
                 // nop - we just move on
             }
         }
+
+        ticker.next().await;
     }
 }
 
