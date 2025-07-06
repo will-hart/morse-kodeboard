@@ -15,9 +15,9 @@ pub type UsbHidDriver<'a> = HidReaderWriter<'a, Driver<'a, USB>, 1, 8>;
 fn configure_usb<'a>() -> Config<'a> {
     // Create embassy-usb Config
     let mut config = Config::new(0xc0de, 0xcafe);
-    config.manufacturer = Some("Embassy");
-    config.product = Some("HID keyboard example");
-    config.serial_number = Some("12345678");
+    config.manufacturer = Some("wilsk");
+    config.product = Some("Morse Kodeboard");
+    config.serial_number = Some("0000001");
     config.max_power = 100;
     config.max_packet_size_0 = 64;
 

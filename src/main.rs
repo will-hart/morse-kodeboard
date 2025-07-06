@@ -33,6 +33,7 @@ static MORSE_BUTTON: ButtonType = Mutex::new(None);
 
 #[embassy_executor::task]
 async fn generate_morse_code_characters(morse_btn: &'static ButtonType, sender: EventSender) {
+    info!("Configuring morse decoder");
     let mut morse_decoder = morse_codec::decoder::Decoder::<16>::new()
         .with_reference_short_ms(100)
         .build();
@@ -40,6 +41,7 @@ async fn generate_morse_code_characters(morse_btn: &'static ButtonType, sender: 
     let mut ticker = Ticker::every(Duration::from_millis(2));
     let mut last_change: Instant = Instant::now();
 
+    info!("Starting morse listen loop");
     loop {
         // debounce the input
         let result = {
@@ -80,6 +82,9 @@ async fn generate_morse_code_characters(morse_btn: &'static ButtonType, sender: 
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
+    info!("Starting kodeboard");
+    info!("Configuring...");
+
     let p = embassy_rp::init(Default::default());
     let morse_btn = Input::new(p.PIN_9, Pull::Up);
     {
@@ -108,12 +113,15 @@ async fn main(spawner: Spawner) {
 
     let event_receiver = EVENT_CHANNEL.receiver();
 
+    info!("Configuration complete");
+
     // set up a listening / transmitting loop for the USB interface
     let in_fut = async {
+        info!("Starting event loop");
         loop {
             match event_receiver.try_receive() {
                 Ok(char) => {
-                    info!("Sending Key");
+                    info!("Sending Key {}", char);
                     // Create a report with the A key pressed. (no shift modifier)
                     let report = KeyboardReport {
                         keycodes: [char, 0, 0, 0, 0, 0],
@@ -142,13 +150,12 @@ async fn main(spawner: Spawner) {
                         Ok(()) => {}
                         Err(e) => warn!("Failed to send report: {:?}", e),
                     };
+                    info!("Send complete");
                 }
                 Err(_err) => {
                     // nop - we just move on
                 }
             }
-
-            info!("LOW DETECTED");
         }
     };
 
