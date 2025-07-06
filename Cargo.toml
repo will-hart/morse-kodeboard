@@ -21,4 +21,6 @@ critical-section = "1.1"
 panic-probe = { version = "1.0.0", features = ["print-defmt"] }
 
 morse-codec = { version = "0.4", default-features = false, features = ["decoder"] }
+portable-atomic = { version = "1.5", features = ["critical-section"] }
 usbd-hid = { version = "0.8.1", features = ["defmt"] }
+static_cell = "2.1.1"

@@ -4,17 +4,20 @@
 use debouncer::DebounceResult;
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_futures::join::join;
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Input, Pull};
 use embassy_rp::peripherals::USB;
 use embassy_rp::usb::{Driver, InterruptHandler};
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
-use embassy_sync::channel::{Channel, Sender};
+use embassy_sync::channel::{Channel, Receiver, Sender};
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Instant, Ticker, Timer};
-use embassy_usb::class::hid::State;
-use usbd_hid::descriptor::KeyboardReport;
+use embassy_usb::class::hid::{HidReader, HidReaderWriter, HidWriter, State};
+use embassy_usb::msos::windows_version;
+use embassy_usb::{Builder, Config, UsbDevice};
+use static_cell::StaticCell;
+use usb::KodeboardUsbDeviceHandler;
+use usbd_hid::descriptor::{KeyboardReport, SerializedDescriptor};
 use {defmt_rtt as _, panic_probe as _};
 
 mod debouncer;
@@ -26,11 +29,156 @@ bind_interrupts!(struct Irqs {
 
 type EventChannel = Channel<ThreadModeRawMutex, u8, 32>;
 type EventSender = Sender<'static, ThreadModeRawMutex, u8, 32>;
+type EventReceiver = Receiver<'static, ThreadModeRawMutex, u8, 32>;
 static EVENT_CHANNEL: EventChannel = Channel::new();
+
+// Descriptors for the USB. Static so we can share the USB handles around tasks
+static CONFIG_DESC: StaticCell<[u8; 256]> = StaticCell::new();
+static BOS_DESC: StaticCell<[u8; 256]> = StaticCell::new();
+static MSOS_DESC: StaticCell<[u8; 256]> = StaticCell::new();
+static CONTROL_BUF: StaticCell<[u8; 64]> = StaticCell::new();
+
+// The state for the USB
+static STATE: StaticCell<State> = StaticCell::new();
+
+// The USB device handler
+static USB_DEV_HANDLER: StaticCell<KodeboardUsbDeviceHandler> = StaticCell::new();
 
 type ButtonType = Mutex<ThreadModeRawMutex, Option<Input<'static>>>;
 static MORSE_BUTTON: ButtonType = Mutex::new(None);
 
+#[embassy_executor::main]
+async fn main(spawner: Spawner) {
+    info!("Connected a Morse Kodeboard!");
+    info!("Configuring...");
+
+    let p = embassy_rp::init(Default::default());
+
+    // Set up USB
+    let driver = Driver::new(p.USB, Irqs);
+    let device_handler = USB_DEV_HANDLER.init(usb::KodeboardUsbDeviceHandler::new());
+
+    // TODO: this is a test code from pid.codes, change before release
+    let mut config = Config::new(0x16c0, 0x27dd);
+    config.manufacturer = Some("Wilsk");
+    config.product = Some("Morse Kodeboard");
+    config.serial_number = Some("000001");
+    config.max_power = 100;
+    config.max_packet_size_0 = 64;
+
+    let mut builder = Builder::new(
+        driver,
+        config,
+        &mut CONFIG_DESC.init([0; 256])[..],
+        &mut BOS_DESC.init([0; 256])[..],
+        &mut MSOS_DESC.init([0; 256])[..],
+        &mut CONTROL_BUF.init([0; 64])[..],
+    );
+    builder.handler(device_handler);
+    builder.msos_descriptor(windows_version::WIN10, 2);
+
+    // Create the HID inteface
+    let hid_config = embassy_usb::class::hid::Config {
+        report_descriptor: KeyboardReport::desc(),
+        request_handler: None,
+        poll_ms: 60,
+        max_packet_size: 64,
+    };
+    let hid = HidReaderWriter::<_, 1, 8>::new(&mut builder, STATE.init(State::new()), hid_config);
+    let usb = builder.build();
+
+    // Set up the button for listening to morse code inputs
+    let mut morse_btn = Input::new(p.PIN_16, Pull::Up);
+    morse_btn.set_schmitt(true);
+    {
+        *(MORSE_BUTTON.lock().await) = Some(morse_btn);
+    }
+
+    info!("Configuration complete");
+
+    // Now start spinning up the tasks
+    info!("Spawning USB handling task");
+    unwrap!(spawner.spawn(usb_loop(usb)));
+
+    info!("Spawning usb HID transmission task");
+    let (reader, writer) = hid.split();
+    unwrap!(spawner.spawn(usb_hid_loop(EVENT_CHANNEL.receiver(), writer)));
+
+    info!("Spawning USB request handler task");
+    unwrap!(spawner.spawn(usb_request_handler(reader)));
+
+    info!("Spawning morse code button observer task");
+    unwrap!(spawner.spawn(generate_morse_code_characters(
+        &MORSE_BUTTON,
+        EVENT_CHANNEL.sender()
+    )));
+}
+
+/// The underlying USB send/receive loop on the [UsbDevice]
+#[embassy_executor::task]
+async fn usb_loop(mut usb: UsbDevice<'static, Driver<'static, USB>>) -> ! {
+    usb.run().await
+}
+
+/// Listens for events from the morse code parser and sends them on as key
+/// presses on the HID keyboard interface
+#[embassy_executor::task]
+async fn usb_hid_loop(
+    event_receiver: EventReceiver,
+    mut writer: HidWriter<'static, Driver<'static, USB>, 8>,
+) {
+    info!("Starting event loop");
+    loop {
+        match event_receiver.try_receive() {
+            Ok(char) => {
+                info!("Sending Key {}", char);
+                // Create a report with the A key pressed. (no shift modifier)
+                let report = KeyboardReport {
+                    keycodes: [char, 0, 0, 0, 0, 0],
+                    leds: 0,
+                    modifier: 0,
+                    reserved: 0,
+                };
+                // Send the report.
+                match writer.write_serialize(&report).await {
+                    Ok(()) => {}
+                    Err(e) => warn!("Failed to send report: {:?}", e),
+                };
+
+                // delay 10ms before we release the key
+                Timer::after(Duration::from_millis(10)).await;
+
+                info!("Releasing Key");
+                let report = KeyboardReport {
+                    keycodes: [0, 0, 0, 0, 0, 0],
+                    leds: 0,
+                    modifier: 0,
+                    reserved: 0,
+                };
+                // Send the report.
+                match writer.write_serialize(&report).await {
+                    Ok(()) => {}
+                    Err(e) => warn!("Failed to send report: {:?}", e),
+                };
+                info!("Send complete");
+            }
+            Err(_err) => {
+                // nop - we just move on
+            }
+        }
+    }
+}
+
+/// Handles USB requests received on the [`HidReader`]
+#[embassy_executor::task]
+async fn usb_request_handler(reader: HidReader<'static, Driver<'static, USB>, 1>) {
+    let mut request_handler = usb::KodeboardUsbRequestHandler::default();
+    reader.run(false, &mut request_handler).await;
+}
+
+/// Listens to the supplied button and passes button actions (press/release) to
+/// a morse code decoder. As characters are received by the encoder it sends them
+/// through the [`EventSender`] channel for transmission via USB HID.
 #[embassy_executor::task]
 async fn generate_morse_code_characters(morse_btn: &'static ButtonType, sender: EventSender) {
     info!("Configuring morse decoder");
@@ -78,98 +226,4 @@ async fn generate_morse_code_characters(morse_btn: &'static ButtonType, sender: 
         // only check inputs periodically
         ticker.next().await;
     }
-}
-
-#[embassy_executor::main]
-async fn main(spawner: Spawner) {
-    info!("Starting kodeboard");
-    info!("Configuring...");
-
-    let p = embassy_rp::init(Default::default());
-    let morse_btn = Input::new(p.PIN_9, Pull::Up);
-    {
-        *(MORSE_BUTTON.lock().await) = Some(morse_btn);
-    }
-
-    // Create the driver, from the HAL and required buffers and handlers
-    let driver = Driver::new(p.USB, Irqs);
-    let mut config_descriptor = [0; 256];
-    let mut bos_descriptor = [0; 256];
-    let mut msos_descriptor = [0; 256];
-    let mut control_buf = [0; 64];
-    let mut device_handler = usb::MyDeviceHandler::new();
-    let mut state = State::new();
-    let (mut usb, hid) = usb::build_usb(
-        driver,
-        &mut config_descriptor,
-        &mut bos_descriptor,
-        &mut msos_descriptor,
-        &mut control_buf,
-        &mut device_handler,
-        &mut state,
-    );
-    let usb_fut = usb.run();
-    let (reader, mut writer) = hid.split();
-
-    let event_receiver = EVENT_CHANNEL.receiver();
-
-    info!("Configuration complete");
-
-    // set up a listening / transmitting loop for the USB interface
-    let in_fut = async {
-        info!("Starting event loop");
-        loop {
-            match event_receiver.try_receive() {
-                Ok(char) => {
-                    info!("Sending Key {}", char);
-                    // Create a report with the A key pressed. (no shift modifier)
-                    let report = KeyboardReport {
-                        keycodes: [char, 0, 0, 0, 0, 0],
-                        leds: 0,
-                        modifier: 0,
-                        reserved: 0,
-                    };
-                    // Send the report.
-                    match writer.write_serialize(&report).await {
-                        Ok(()) => {}
-                        Err(e) => warn!("Failed to send report: {:?}", e),
-                    };
-
-                    // delay 10ms before we release the key
-                    Timer::after(Duration::from_millis(10)).await;
-
-                    info!("Releasing Key");
-                    let report = KeyboardReport {
-                        keycodes: [0, 0, 0, 0, 0, 0],
-                        leds: 0,
-                        modifier: 0,
-                        reserved: 0,
-                    };
-                    // Send the report.
-                    match writer.write_serialize(&report).await {
-                        Ok(()) => {}
-                        Err(e) => warn!("Failed to send report: {:?}", e),
-                    };
-                    info!("Send complete");
-                }
-                Err(_err) => {
-                    // nop - we just move on
-                }
-            }
-        }
-    };
-
-    unwrap!(spawner.spawn(generate_morse_code_characters(
-        &MORSE_BUTTON,
-        EVENT_CHANNEL.sender()
-    )));
-
-    let mut request_handler = usb::MyRequestHandler {};
-    let out_fut = async {
-        reader.run(false, &mut request_handler).await;
-    };
-
-    // Run everything concurrently.
-    // If we had made everything `'static` above instead, we could do this using separate tasks instead.
-    join(usb_fut, join(in_fut, out_fut)).await;
 }
