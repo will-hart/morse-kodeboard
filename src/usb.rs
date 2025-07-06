@@ -34,8 +34,8 @@ pub struct KodeboardUsbDeviceHandler {
     configured: AtomicBool,
 }
 
-impl KodeboardUsbDeviceHandler {
-    pub fn new() -> Self {
+impl Default for KodeboardUsbDeviceHandler {
+    fn default() -> Self {
         KodeboardUsbDeviceHandler {
             configured: AtomicBool::new(false),
         }

@@ -56,7 +56,7 @@ async fn main(spawner: Spawner) {
 
     // Set up USB
     let driver = Driver::new(p.USB, Irqs);
-    let device_handler = USB_DEV_HANDLER.init(usb::KodeboardUsbDeviceHandler::new());
+    let device_handler = USB_DEV_HANDLER.init(usb::KodeboardUsbDeviceHandler::default());
 
     // TODO: this is a test code from pid.codes, change before release
     let mut config = Config::new(0x16c0, 0x27dd);

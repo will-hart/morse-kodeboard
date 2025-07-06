@@ -34,3 +34,16 @@ I honestly don't know why I did this, I don't even know morse code.
 
 * Software: MIT or Apache 2.0
 * Hardware (not that there is any yet): CERN Open Hardware 2.0 - Permissive
+
+## Things I (re/)learned while doing this
+
+- Descriptors are always a pain, but I guess with embassy its kind of straightforward?
+- Most embassy examples don't use tasks for USB. Its because the code is messier
+  as you need to make a lot of the descriptor buffers etc `static`. Using
+  `StaticCell` was pretty handy here (there was one embassy example).
+- Wireshark + USBpcap are your friend! (although its still tricky working out which
+  interface you're meant to look at in windows).
+  - Filter messages to a specific address using `usb.addr[0:4] == "1.1."`
+- Make sure to throttle loops, this was the cause of the keyboard not being recognised
+  as the USB listening loop was running without any throttling.
+  
