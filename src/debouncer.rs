@@ -12,17 +12,6 @@ pub struct DebouncedInput {
     previous_state: bool,
 }
 
-#[derive(Default)]
-/// Returned by the [DebouncedInput::debounce] function, to denote whether the
-/// input has changed and whether the input is currently on.
-pub struct DebounceResult {
-    /// Has the value changed in the most recent update?
-    pub is_changed: bool,
-    /// Is the value currently "on"? Note that "on" may be high or low depending
-    /// on the hardware configuration)
-    pub is_on: bool,
-}
-
 impl DebouncedInput {
     pub fn new(is_on: bool) -> Self {
         Self {
@@ -31,24 +20,23 @@ impl DebouncedInput {
         }
     }
 
+    pub fn current(&self) -> bool {
+        self.previous_state
+    }
+
     /// Debounces the given input taking the current value and returning `true`
     /// if the input is on after debouncing. Note that "on" may be high or low
     /// in hardware, but a boolean should be passed here which is `true` if the
     /// input is currently on
-    pub fn debounce(&mut self, is_on: bool) -> DebounceResult {
+    pub fn debounce(&mut self, is_on: bool) -> bool {
         self.memory = (self.memory << 1) | if is_on { 0 } else { 1 };
 
-        let new_state = if self.memory == ON {
+        if self.memory == ON {
             true
         } else if self.memory == OFF {
             false
         } else {
             self.previous_state
-        };
-
-        let is_changed = new_state != self.previous_state;
-        self.previous_state = new_state;
-
-        DebounceResult { is_changed, is_on }
+        }
     }
 }

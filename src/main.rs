@@ -1,7 +1,6 @@
 #![no_std]
 #![no_main]
 
-use debouncer::DebounceResult;
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_rp::bind_interrupts;
@@ -22,6 +21,7 @@ use usbd_hid::descriptor::{KeyboardReport, SerializedDescriptor};
 use {defmt_rtt as _, panic_probe as _};
 
 mod debouncer;
+mod decoder;
 mod key_mapping;
 mod usb;
 
@@ -139,7 +139,7 @@ async fn usb_hid_loop(
                     continue;
                 };
 
-                info!("Sending Key {} ({}u8)", char, code);
+                info!("Sending {} Key ({}u8)", char, code);
                 // Create a report with the A key pressed. (no shift modifier)
                 let report = KeyboardReport {
                     keycodes: [code, 0, 0, 0, 0, 0],
@@ -156,7 +156,7 @@ async fn usb_hid_loop(
                 // delay 10ms before we release the key
                 Timer::after(Duration::from_millis(10)).await;
 
-                info!("Releasing Key");
+                info!("Releasing {} Key", char);
                 let report = KeyboardReport {
                     keycodes: [0, 0, 0, 0, 0, 0],
                     leds: 0,
@@ -168,7 +168,6 @@ async fn usb_hid_loop(
                     Ok(()) => {}
                     Err(e) => warn!("Failed to send report: {:?}", e),
                 };
-                info!("Send complete");
             }
             Err(_err) => {
                 // nop - we just move on
@@ -192,18 +191,14 @@ async fn usb_request_handler(reader: HidReader<'static, Driver<'static, USB>, 1>
 #[embassy_executor::task]
 async fn generate_morse_code_characters(morse_btn: &'static ButtonType, sender: EventSender) {
     info!("Configuring morse decoder");
-    let mut morse_decoder = morse_codec::decoder::Decoder::<16>::new()
-        .with_reference_short_ms(100)
-        .build();
+    let mut morse_decoder = decoder::Decoder::new(100);
+    let mut ticker = Ticker::every(Duration::from_millis(2));
 
     let mut btn_debouncer = if let Some(btn_ref) = morse_btn.lock().await.as_ref() {
         debouncer::DebouncedInput::new(btn_ref.is_high())
     } else {
         crate::panic!("Unable to access button")
     };
-
-    let mut ticker = Ticker::every(Duration::from_millis(2));
-    let mut last_change: Instant = Instant::now();
 
     info!("Starting morse listen loop");
     loop {
@@ -214,30 +209,14 @@ async fn generate_morse_code_characters(morse_btn: &'static ButtonType, sender: 
             if let Some(btn_ref) = btn_unlocked.as_ref() {
                 btn_debouncer.debounce(btn_ref.is_high())
             } else {
-                DebounceResult::default()
+                btn_debouncer.current()
             }
         };
 
         // update the morse decoder
-        if result.is_changed {
-            // register the event with the morse decoder
-            let this_change = Instant::now();
-            let delta = this_change.duration_since(last_change);
-            last_change = this_change;
-
-            info!("Received input - {}, {}ms", result.is_on, delta.as_millis());
-            morse_decoder.signal_event(delta.as_millis() as u16, result.is_on);
-
-            // check if we have a message to send on the keyboard
-            let len = morse_decoder.message.len();
-            if len > 0 {
-                let msg = morse_decoder.message.as_charray();
-                for &ch in msg.iter().take(len) {
-                    sender.send(ch.to_ascii_lowercase()).await;
-                }
-
-                morse_decoder.message.clear();
-            }
+        let change_time = Instant::now();
+        if let Some(char) = morse_decoder.push(result, change_time) {
+            sender.send(char).await;
         }
 
         // only check inputs periodically

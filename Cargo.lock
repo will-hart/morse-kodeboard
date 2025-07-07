@@ -847,12 +847,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a282da65faaf38286cf3be983213fcf1d2e2a58700e808f83f4ea9a4804bc0"
 
 [[package]]
-name = "morse-codec"
-version = "0.4.30"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c1691d07a8057f89ed07e8881d654e9fbc762fff23b885dcf8488e4f357c3ee"
-
-[[package]]
 name = "morse-kodeboard"
 version = "0.1.0"
 dependencies = [
@@ -868,7 +862,6 @@ dependencies = [
  "embassy-sync 0.7.0",
  "embassy-time",
  "embassy-usb",
- "morse-codec",
  "panic-probe",
  "portable-atomic",
  "static_cell",
