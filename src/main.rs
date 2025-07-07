@@ -29,9 +29,10 @@ bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => InterruptHandler<USB>;
 });
 
-type EventChannel = Channel<ThreadModeRawMutex, char, 32>;
-type EventSender = Sender<'static, ThreadModeRawMutex, char, 32>;
-type EventReceiver = Receiver<'static, ThreadModeRawMutex, char, 32>;
+type EventChannelType = (char, bool);
+type EventChannel = Channel<ThreadModeRawMutex, EventChannelType, 32>;
+type EventSender = Sender<'static, ThreadModeRawMutex, EventChannelType, 32>;
+type EventReceiver = Receiver<'static, ThreadModeRawMutex, EventChannelType, 32>;
 static EVENT_CHANNEL: EventChannel = Channel::new();
 
 // Descriptors for the USB. Static so we can share the USB handles around tasks
@@ -48,6 +49,31 @@ static USB_DEV_HANDLER: StaticCell<KodeboardUsbDeviceHandler> = StaticCell::new(
 
 type ButtonType = Mutex<ThreadModeRawMutex, Option<Input<'static>>>;
 static MORSE_BUTTON: ButtonType = Mutex::new(None);
+static SPACE_BUTTON: ButtonType = Mutex::new(None);
+static SHIFT_BUTTON: ButtonType = Mutex::new(None);
+
+macro_rules! setup_button {
+    ($pin: expr, $target: expr) => {
+        // Set up the button for listening to morse code inputs
+        let mut btn = Input::new($pin, Pull::Up);
+        btn.set_schmitt(true);
+        {
+            *($target.lock().await) = Some(btn);
+        }
+    };
+}
+
+macro_rules! read_button {
+    ($btn: expr) => {{
+        let btn_unlocked = $btn.lock().await;
+
+        if let Some(btn_ref) = btn_unlocked.as_ref() {
+            Some(btn_ref.is_high())
+        } else {
+            None
+        }
+    }};
+}
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -90,11 +116,9 @@ async fn main(spawner: Spawner) {
     let usb = builder.build();
 
     // Set up the button for listening to morse code inputs
-    let mut morse_btn = Input::new(p.PIN_16, Pull::Up);
-    morse_btn.set_schmitt(true);
-    {
-        *(MORSE_BUTTON.lock().await) = Some(morse_btn);
-    }
+    setup_button!(p.PIN_14, SPACE_BUTTON);
+    setup_button!(p.PIN_15, SHIFT_BUTTON);
+    setup_button!(p.PIN_16, MORSE_BUTTON);
 
     info!("Configuration complete");
 
@@ -112,6 +136,7 @@ async fn main(spawner: Spawner) {
     info!("Spawning morse code button observer task");
     unwrap!(spawner.spawn(generate_morse_code_characters(
         &MORSE_BUTTON,
+        &SHIFT_BUTTON,
         EVENT_CHANNEL.sender()
     )));
 }
@@ -134,17 +159,16 @@ async fn usb_hid_loop(
     let mut ticker = Ticker::every(Duration::from_millis(20));
     loop {
         match event_receiver.try_receive() {
-            Ok(char) => {
+            Ok((char, shift_held)) => {
                 let Some(code) = char_to_hid_u8(char) else {
                     continue;
                 };
 
                 info!("Sending {} Key ({}u8)", char, code);
-                // Create a report with the A key pressed. (no shift modifier)
                 let report = KeyboardReport {
                     keycodes: [code, 0, 0, 0, 0, 0],
                     leds: 0,
-                    modifier: 0,
+                    modifier: if shift_held { 0x02 } else { 0 },
                     reserved: 0,
                 };
                 // Send the report.
@@ -189,7 +213,11 @@ async fn usb_request_handler(reader: HidReader<'static, Driver<'static, USB>, 1>
 /// a morse code decoder. As characters are received by the encoder it sends them
 /// through the [`EventSender`] channel for transmission via USB HID.
 #[embassy_executor::task]
-async fn generate_morse_code_characters(morse_btn: &'static ButtonType, sender: EventSender) {
+async fn generate_morse_code_characters(
+    morse_btn: &'static ButtonType,
+    shift_button: &'static ButtonType,
+    sender: EventSender,
+) {
     info!("Configuring morse decoder");
     let mut morse_decoder = decoder::Decoder::new(60);
     let mut ticker = Ticker::every(Duration::from_millis(1));
@@ -204,10 +232,8 @@ async fn generate_morse_code_characters(morse_btn: &'static ButtonType, sender: 
     loop {
         // debounce the input
         let result = {
-            let btn_unlocked = morse_btn.lock().await;
-
-            if let Some(btn_ref) = btn_unlocked.as_ref() {
-                btn_debouncer.debounce(btn_ref.is_high())
+            if let Some(btn) = read_button!(morse_btn) {
+                btn_debouncer.debounce(btn)
             } else {
                 btn_debouncer.current()
             }
@@ -216,7 +242,12 @@ async fn generate_morse_code_characters(morse_btn: &'static ButtonType, sender: 
         // update the morse decoder
         let change_time = Instant::now();
         if let Some(char) = morse_decoder.push(result, change_time) {
-            sender.send(char).await;
+            let shift_held = if let Some(shift_held) = read_button!(shift_button) {
+                shift_held
+            } else {
+                false
+            };
+            sender.send((char, shift_held)).await;
         }
 
         // only check inputs periodically
