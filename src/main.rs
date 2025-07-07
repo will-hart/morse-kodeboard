@@ -164,7 +164,12 @@ async fn usb_hid_loop(
                     continue;
                 };
 
-                info!("Sending {} Key ({}u8)", char, code);
+                info!(
+                    "Sending {}{} Key ({}u8)",
+                    if shift_held { "SHIFT+" } else { "" },
+                    char,
+                    code
+                );
                 let report = KeyboardReport {
                     keycodes: [code, 0, 0, 0, 0, 0],
                     leds: 0,
