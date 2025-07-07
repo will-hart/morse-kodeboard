@@ -191,8 +191,8 @@ async fn usb_request_handler(reader: HidReader<'static, Driver<'static, USB>, 1>
 #[embassy_executor::task]
 async fn generate_morse_code_characters(morse_btn: &'static ButtonType, sender: EventSender) {
     info!("Configuring morse decoder");
-    let mut morse_decoder = decoder::Decoder::new(100);
-    let mut ticker = Ticker::every(Duration::from_millis(2));
+    let mut morse_decoder = decoder::Decoder::new(60);
+    let mut ticker = Ticker::every(Duration::from_millis(1));
 
     let mut btn_debouncer = if let Some(btn_ref) = morse_btn.lock().await.as_ref() {
         debouncer::DebouncedInput::new(btn_ref.is_high())
