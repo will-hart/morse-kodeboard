@@ -257,39 +257,54 @@ async fn monitor_space_key(space_btn: &'static ButtonType, sender: EventSender) 
 #[embassy_executor::task]
 async fn generate_morse_code_characters(
     morse_btn: &'static ButtonType,
-    shift_button: &'static ButtonType,
+    shift_btn: &'static ButtonType,
     sender: EventSender,
 ) {
     info!("Configuring morse decoder");
     let mut morse_decoder = decoder::Decoder::new(60);
     let mut ticker = Ticker::every(Duration::from_millis(1));
 
-    let mut btn_debouncer = if let Some(btn_ref) = morse_btn.lock().await.as_ref() {
+    let mut morse_debouncer = if let Some(btn_ref) = morse_btn.lock().await.as_ref() {
         debouncer::DebouncedInput::new(btn_ref.is_high())
     } else {
-        crate::panic!("Unable to access button")
+        crate::panic!("Unable to configure morse button")
     };
+
+    let mut shift_debouncer = if let Some(btn_ref) = shift_btn.lock().await.as_ref() {
+        debouncer::DebouncedInput::new(btn_ref.is_high())
+    } else {
+        crate::panic!("Unable to configure shift button")
+    };
+    let mut prev_shift_state = shift_debouncer.current();
+    let mut shift_held = false;
 
     info!("Starting morse listen loop");
     loop {
         // debounce the input
-        let result = {
-            if let Some(btn) = read_button!(morse_btn) {
-                btn_debouncer.debounce(btn)
-            } else {
-                btn_debouncer.current()
-            }
+        let morse_btn = if let Some(btn) = read_button!(morse_btn) {
+            morse_debouncer.debounce(btn)
+        } else {
+            morse_debouncer.current()
         };
+
+        let shift_button = if let Some(btn) = read_button!(shift_btn) {
+            shift_debouncer.debounce(btn)
+        } else {
+            shift_debouncer.current()
+        };
+
+        if shift_button != prev_shift_state {
+            prev_shift_state = shift_button;
+            if shift_button {
+                shift_held = !shift_held;
+                info!("Toggled Shift to {}", shift_held);
+            }
+        }
 
         // update the morse decoder
         let change_time = Instant::now();
-        if let Some(char) = morse_decoder.push(result, change_time) {
-            let shift_held = if let Some(shift_held) = read_button!(shift_button) {
-                shift_held
-            } else {
-                false
-            };
-            sender.send((char, !shift_held)).await;
+        if let Some(char) = morse_decoder.push(morse_btn, change_time) {
+            sender.send((char, shift_held)).await;
         }
 
         // only check inputs periodically
