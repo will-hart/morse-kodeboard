@@ -133,6 +133,9 @@ async fn main(spawner: Spawner) {
     info!("Spawning USB request handler task");
     unwrap!(spawner.spawn(usb_request_handler(reader)));
 
+    info!("Spawning space bar monitoring task");
+    unwrap!(spawner.spawn(monitor_space_key(&SPACE_BUTTON, EVENT_CHANNEL.sender())));
+
     info!("Spawning morse code button observer task");
     unwrap!(spawner.spawn(generate_morse_code_characters(
         &MORSE_BUTTON,
@@ -165,8 +168,8 @@ async fn usb_hid_loop(
                 };
 
                 info!(
-                    "Sending {}{} Key ({}u8)",
-                    if shift_held { "SHIFT+" } else { "" },
+                    "Sending '{}{}' Key ({}u8)",
+                    if shift_held { "shift+" } else { "" },
                     char,
                     code
                 );
@@ -185,7 +188,7 @@ async fn usb_hid_loop(
                 // delay 10ms before we release the key
                 Timer::after(Duration::from_millis(10)).await;
 
-                info!("Releasing {} Key", char);
+                info!("Releasing '{}' Key", char);
                 let report = KeyboardReport {
                     keycodes: [0, 0, 0, 0, 0, 0],
                     leds: 0,
@@ -212,6 +215,40 @@ async fn usb_hid_loop(
 async fn usb_request_handler(reader: HidReader<'static, Driver<'static, USB>, 1>) {
     let mut request_handler = usb::KodeboardUsbRequestHandler::default();
     reader.run(false, &mut request_handler).await;
+}
+
+/// Listens for the space key and then sends a "space" event to the keyboard
+#[embassy_executor::task]
+async fn monitor_space_key(space_btn: &'static ButtonType, sender: EventSender) {
+    let mut ticker = Ticker::every(Duration::from_millis(5));
+    let mut btn_debouncer = if let Some(btn_ref) = space_btn.lock().await.as_ref() {
+        debouncer::DebouncedInput::new(btn_ref.is_high())
+    } else {
+        crate::panic!("Unable to access button")
+    };
+
+    let mut prev_high = btn_debouncer.current();
+
+    loop {
+        let result = {
+            if let Some(btn) = read_button!(space_btn) {
+                btn_debouncer.debounce(btn)
+            } else {
+                btn_debouncer.current()
+            }
+        };
+
+        if result != prev_high {
+            prev_high = result;
+
+            if result {
+                info!("Space button pressed");
+                sender.send((' ', false)).await;
+            }
+        }
+
+        ticker.next().await;
+    }
 }
 
 /// Listens to the supplied button and passes button actions (press/release) to
@@ -252,7 +289,7 @@ async fn generate_morse_code_characters(
             } else {
                 false
             };
-            sender.send((char, shift_held)).await;
+            sender.send((char, !shift_held)).await;
         }
 
         // only check inputs periodically

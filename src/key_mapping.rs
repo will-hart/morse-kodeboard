@@ -38,6 +38,7 @@ pub fn char_to_hid_u8(c: char) -> Option<u8> {
         '7' => Some(0x24),
         '8' => Some(0x25),
         '9' => Some(0x26),
+        ' ' => Some(0x2C),
         c => {
             warn!("unsupported character: {}", c);
             None
