@@ -489,7 +489,7 @@
       "plot": "manu_files/",
       "pos_files": "",
       "specctra_dsn": "",
-      "step": "",
+      "step": "morse_kodeboard.stl",
       "svg": "",
       "vrml": ""
     },
