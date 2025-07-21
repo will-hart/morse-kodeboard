@@ -81,7 +81,7 @@ impl Decoder {
             [Dah, Break, Empty, Empty, Empty, Empty] => Some('t'),
             [Dit, Dit, Dah, Break, Empty, Empty] => Some('u'),
             [Dit, Dit, Dit, Dah, Break, Empty] => Some('v'),
-            [Dit, Dah, Dah, Break, Break, Empty] => Some('w'),
+            [Dit, Dah, Dah, Break, Empty, Empty] => Some('w'),
             [Dah, Dit, Dit, Dah, Break, Empty] => Some('x'),
             [Dah, Dit, Dah, Dah, Break, Empty] => Some('y'),
             [Dah, Dah, Dit, Dit, Break, Empty] => Some('z'),
